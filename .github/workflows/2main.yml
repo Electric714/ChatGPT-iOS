@@ -1,0 +1,85 @@
+name: Build Unsigned IPA (ChatGPT-iOS)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Verify project file exists
+        run: |
+          set -euxo pipefail
+          ls -la
+          test -d "ChatGPT.xcodeproj"
+
+      - name: List schemes (debug)
+        run: |
+          set -euxo pipefail
+          xcodebuild -list -project "ChatGPT.xcodeproj"
+
+      - name: Clean + Archive (Release, iphoneos, NO signing)
+        run: |
+          set -euxo pipefail
+          mkdir -p build
+
+          xcodebuild \
+            -project "ChatGPT.xcodeproj" \
+            -scheme "ChatGPT" \
+            -configuration "Release" \
+            -sdk "iphoneos" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$PWD/build/ChatGPT.xcarchive" \
+            clean archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            | tee build/xcodebuild-archive.log
+
+      - name: Package unsigned IPA (Payload zip)
+        run: |
+          set -euxo pipefail
+
+          APPS_DIR="$PWD/build/ChatGPT.xcarchive/Products/Applications"
+          echo "Archive Applications dir:"
+          ls -la "$APPS_DIR" || true
+
+          # Auto-detect the .app name so we don't hardcode it.
+          APP_PATH="$(find "$APPS_DIR" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+
+          if [ -z "${APP_PATH:-}" ] || [ ! -d "$APP_PATH" ]; then
+            echo "❌ No .app found in the archive."
+            echo "Dumping archive tree (limited):"
+            find "$PWD/build/ChatGPT.xcarchive" -maxdepth 6 -print || true
+            exit 1
+          fi
+
+          echo "Using app: $APP_PATH"
+
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+
+          rm -f ChatGPT-unsigned.ipa
+          /usr/bin/zip -r "ChatGPT-unsigned.ipa" Payload
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPT-iOS-unsigned-ipa
+          path: |
+            ChatGPT-unsigned.ipa
+            build/xcodebuild-archive.log
+          if-no-files-found: error
